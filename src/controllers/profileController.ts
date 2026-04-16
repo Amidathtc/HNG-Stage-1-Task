@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { v7 as uuidv7 } from "uuid";
-import { pool } from "../config/database";
+import { getPool } from "../config/database";
 import { fetchAllExternalData } from "../services/externalApi";
 import { getAgeGroup, getTopCountry } from "../utils/classification";
 
@@ -51,6 +51,7 @@ function formatListProfile(row: ProfileRow) {
 
 export async function createProfile(req: Request, res: Response): Promise<void> {
   try {
+    const pool = getPool();
     const { name } = req.body;
 
     // Validate: missing body or name key
@@ -180,6 +181,7 @@ export async function createProfile(req: Request, res: Response): Promise<void> 
 
 export async function getProfileById(req: Request, res: Response): Promise<void> {
   try {
+    const pool = getPool();
     const id = req.params.id as string;
 
     // Validate UUID format
@@ -223,6 +225,7 @@ export async function getProfileById(req: Request, res: Response): Promise<void>
 
 export async function getAllProfiles(req: Request, res: Response): Promise<void> {
   try {
+    const pool = getPool();
     const { gender, country_id, age_group } = req.query;
 
     let query = "SELECT * FROM profiles WHERE 1=1";
@@ -269,6 +272,7 @@ export async function getAllProfiles(req: Request, res: Response): Promise<void>
 
 export async function deleteProfile(req: Request, res: Response): Promise<void> {
   try {
+    const pool = getPool();
     const id = req.params.id as string;
 
     // Validate UUID format

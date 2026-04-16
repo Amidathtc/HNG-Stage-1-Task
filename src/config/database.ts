@@ -1,19 +1,32 @@
 import { Pool } from "pg";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false,
-});
+let pool: Pool;
+let dbInitialized = false;
 
 /**
- * Initialize the database schema.
- * Creates the profiles table and a case-insensitive unique index on name.
+ * Get or create the PostgreSQL connection pool.
+ * Reused across serverless invocations while the lambda stays warm.
+ */
+export function getPool(): Pool {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5, // Keep small for serverless
+    });
+  }
+  return pool;
+}
+
+/**
+ * Initialize the database schema (runs once per cold start).
+ * Creates the profiles table and unique index if they don't exist.
  */
 export async function initDB(): Promise<void> {
-  const client = await pool.connect();
+  if (dbInitialized) return;
+
+  const p = getPool();
+  const client = await p.connect();
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS profiles (
@@ -35,6 +48,7 @@ export async function initDB(): Promise<void> {
       ON profiles (LOWER(name));
     `);
 
+    dbInitialized = true;
     console.log("✅ Database initialized successfully");
   } catch (err: any) {
     console.error("❌ Database initialization error:", err.message);
@@ -43,5 +57,3 @@ export async function initDB(): Promise<void> {
     client.release();
   }
 }
-
-export { pool };

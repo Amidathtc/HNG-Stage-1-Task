@@ -1,5 +1,6 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
+import { initDB } from "./config/database";
 import profileRoutes from "./routes/profiles";
 
 const app = express();
@@ -10,6 +11,16 @@ app.use(cors({ origin: "*" }));
 // Parse JSON bodies
 app.use(express.json());
 
+// Lazy DB initialization middleware (runs once per cold start)
+app.use(async (_req: Request, _res: Response, next: NextFunction) => {
+  try {
+    await initDB();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Health check
 app.get("/", (_req, res) => {
   res.json({ status: "ok", message: "Profile API is running" });
@@ -19,7 +30,7 @@ app.get("/", (_req, res) => {
 app.use("/api/profiles", profileRoutes);
 
 // 404 catch-all
-app.use((_req, res) => {
+app.use((_req: Request, res: Response) => {
   res.status(404).json({
     status: "error",
     message: "Route not found",
