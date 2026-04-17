@@ -11,6 +11,11 @@ app.use(cors({ origin: "*" }));
 // Parse JSON bodies
 app.use(express.json());
 
+// Health check — responds without DB dependency
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", message: "Profile API is running" });
+});
+
 // Lazy DB initialization middleware (runs once per cold start)
 app.use(async (_req: Request, _res: Response, next: NextFunction) => {
   try {
@@ -19,11 +24,6 @@ app.use(async (_req: Request, _res: Response, next: NextFunction) => {
   } catch (err) {
     next(err);
   }
-});
-
-// Health check
-app.get("/", (_req, res) => {
-  res.json({ status: "ok", message: "Profile API is running" });
 });
 
 // Profile routes
