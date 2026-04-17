@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { v7 as uuidv7 } from "uuid";
+// import { v7 as uuidv7 } from "uuid";
+import { randomUUID } from "crypto";
 import { getPool } from "../config/database";
 import { fetchAllExternalData } from "../services/externalApi";
 import { getAgeGroup, getTopCountry } from "../utils/classification";
@@ -141,7 +142,8 @@ export async function createProfile(req: Request, res: Response): Promise<void> 
     }
 
     // Build profile
-    const id = uuidv7();
+    // const id = uuidv7();
+    const id = randomUUID();
     const ageGroup = getAgeGroup(ageData.age);
     const createdAt = new Date().toISOString();
 
