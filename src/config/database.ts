@@ -38,9 +38,15 @@ export async function initDB(): Promise<void> {
         age INTEGER NOT NULL,
         age_group VARCHAR(20) NOT NULL,
         country_id VARCHAR(10) NOT NULL,
+        country_name VARCHAR(255),
         country_probability DOUBLE PRECISION NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    // Ensure backwards compatibility with older schema
+    await client.query(`
+      ALTER TABLE profiles ADD COLUMN IF NOT EXISTS country_name VARCHAR(255);
     `);
 
     await client.query(`

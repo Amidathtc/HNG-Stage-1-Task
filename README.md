@@ -43,9 +43,33 @@ GET /api/profiles/:id
 
 ### Get All Profiles
 ```
-GET /api/profiles?gender=male&country_id=NG&age_group=adult
+GET /api/profiles?gender=male&country_id=NG&age_group=adult&sort_by=age&order=desc
 ```
-**200 OK** — Returns filtered list with count. All query parameters are optional and case-insensitive.
+**200 OK** — Returns paginated and filtered list with total count.
+
+**Supported Filters**:
+`gender`, `age_group`, `country_id`, `min_age`, `max_age`, `min_gender_probability`, `min_country_probability`.
+
+**Sorting and Pagination**:
+`sort_by` (age, created_at, gender_probability), `order` (asc, desc). Defaults to `created_at` DESC.
+`page` (default 1), `limit` (default 10, max 50).
+
+### Natural Language Search
+```
+GET /api/profiles/search?q=young males from nigeria
+```
+**200 OK** — Parses plain English query strings to match the data exactly and supports pagination identically to standard listing algorithms.
+
+#### Natural Language Parsing Approach
+Our system uses a fast rule-based engine parsing approach containing explicit keyword and regex pattern definitions directly mapping to Database filtering constraints:
+- **Age Mapping Requirements:** "young" equates to individuals aged 16 to 24 (`min_age=16`, `max_age=24`). Mentions of "child"/"teenager"/"adult"/"senior" map directly to the backend `age_group` schema. Words like "above X", "over X" or "under X", "below X" map dynamically to numeric integer limits (`min_age` or `max_age`).
+- **Gender Syntax:** Variations of explicitly gendered references ("females", "women", "girls" -> `female`) apply to the `gender` column directly.
+- **Location Mapping:** Phrasing such as "from [Country]" or "in [Country]" captures subsequent phrasing via Regex patterns securely mapped to their ISO Code Alpha-2 implementation via `i18n-iso-countries`.
+  
+#### Limitations & Edge Cases
+- **Strict Rule-based:** As this mechanism utilizes rule-based RegExp algorithms, the approach does NOT handle complex AI interpretations, typos/misspellings, or ambiguous compound rules where adjectives override each other confusingly.
+- **Intersection Only Limitations:** Multi-conditional strings ("males OR females") are inherently parsed into intersection logic and evaluate mutually exclusive properties into mutually inclusive filters resulting in mathematically impossible constraints returning 0 elements. We don't parse OR boolean queries effectively.
+- If a query cannot be correctly deciphered due to an unrecognized country or missing mappings, it returns: `{ "status": "error", "message": "Unable to interpret query" }`.
 
 ### Delete Profile
 ```

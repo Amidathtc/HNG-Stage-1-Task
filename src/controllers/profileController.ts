@@ -16,6 +16,7 @@ interface ProfileRow {
   age: number;
   age_group: string;
   country_id: string;
+  country_name: string;
   country_probability: number;
   created_at: string;
 }
@@ -32,19 +33,24 @@ function formatFullProfile(row: ProfileRow) {
     age: row.age,
     age_group: row.age_group,
     country_id: row.country_id,
+    country_name: row.country_name,
     country_probability: parseFloat(String(row.country_probability)),
     created_at: new Date(row.created_at).toISOString(),
   };
 }
 
-function formatListProfile(row: ProfileRow) {
+function formatClientProfile(row: ProfileRow) {
   return {
     id: row.id,
     name: row.name,
     gender: row.gender,
+    gender_probability: parseFloat(String(row.gender_probability)),
     age: row.age,
     age_group: row.age_group,
     country_id: row.country_id,
+    country_name: row.country_name,
+    country_probability: parseFloat(String(row.country_probability)),
+    created_at: new Date(row.created_at).toISOString(),
   };
 }
 
@@ -142,15 +148,22 @@ export async function createProfile(req: Request, res: Response): Promise<void> 
     }
 
     // Build profile
-    // const id = uuidv7();
     const id = randomUUID();
     const ageGroup = getAgeGroup(ageData.age);
     const createdAt = new Date().toISOString();
+    
+    const regionNamesInEnglish = new Intl.DisplayNames(['en'], { type: 'region' });
+    let countryName = topCountry.country_id;
+    try {
+      countryName = regionNamesInEnglish.of(topCountry.country_id) || topCountry.country_id;
+    } catch {
+      // Fallback in case of parsing issue
+    }
 
     // Insert into database
     const insertResult = await pool.query<ProfileRow>(
-      `INSERT INTO profiles (id, name, gender, gender_probability, sample_size, age, age_group, country_id, country_probability, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO profiles (id, name, gender, gender_probability, sample_size, age, age_group, country_id, country_name, country_probability, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         id,
@@ -161,6 +174,7 @@ export async function createProfile(req: Request, res: Response): Promise<void> 
         ageData.age,
         ageGroup,
         topCountry.country_id,
+        countryName,
         topCountry.probability,
         createdAt,
       ]
@@ -228,21 +242,28 @@ export async function getProfileById(req: Request, res: Response): Promise<void>
 export async function getAllProfiles(req: Request, res: Response): Promise<void> {
   try {
     const pool = getPool();
-    const { gender, country_id, age_group } = req.query;
+    const {
+      gender,
+      age_group,
+      country_id,
+      min_age,
+      max_age,
+      min_gender_probability,
+      min_country_probability,
+      sort_by,
+      order,
+      page,
+      limit,
+    } = req.query;
 
-    let query = "SELECT * FROM profiles WHERE 1=1";
-    const params: string[] = [];
+    let query = "SELECT *, COUNT(*) OVER() as total_count FROM profiles WHERE 1=1";
+    const params: (string | number)[] = [];
     let paramIndex = 1;
 
+    // Filters
     if (gender && typeof gender === "string") {
       query += ` AND LOWER(gender) = LOWER($${paramIndex})`;
       params.push(gender);
-      paramIndex++;
-    }
-
-    if (country_id && typeof country_id === "string") {
-      query += ` AND LOWER(country_id) = LOWER($${paramIndex})`;
-      params.push(country_id);
       paramIndex++;
     }
 
@@ -252,14 +273,70 @@ export async function getAllProfiles(req: Request, res: Response): Promise<void>
       paramIndex++;
     }
 
-    query += " ORDER BY created_at DESC";
+    if (country_id && typeof country_id === "string") {
+      query += ` AND LOWER(country_id) = LOWER($${paramIndex})`;
+      params.push(country_id);
+      paramIndex++;
+    }
 
-    const result = await pool.query<ProfileRow>(query, params);
+    if (min_age && !isNaN(Number(min_age))) {
+      query += ` AND age >= $${paramIndex}`;
+      params.push(Number(min_age));
+      paramIndex++;
+    }
+
+    if (max_age && !isNaN(Number(max_age))) {
+      query += ` AND age <= $${paramIndex}`;
+      params.push(Number(max_age));
+      paramIndex++;
+    }
+
+    if (min_gender_probability && !isNaN(Number(min_gender_probability))) {
+      query += ` AND gender_probability >= $${paramIndex}`;
+      params.push(Number(min_gender_probability));
+      paramIndex++;
+    }
+
+    if (min_country_probability && !isNaN(Number(min_country_probability))) {
+      query += ` AND country_probability >= $${paramIndex}`;
+      params.push(Number(min_country_probability));
+      paramIndex++;
+    }
+
+    // Sorting
+    const validSortColumns = ["age", "created_at", "gender_probability"];
+    const sortField = typeof sort_by === "string" && validSortColumns.includes(sort_by.toLowerCase()) 
+      ? sort_by.toLowerCase() 
+      : null;
+      
+    const sortOrder = typeof order === "string" && order.toLowerCase() === "desc" ? "DESC" : "ASC";
+
+    if (sortField) {
+      query += ` ORDER BY ${sortField} ${sortOrder}, id ASC`;
+    } else {
+      query += ` ORDER BY created_at DESC, id ASC`;
+    }
+
+    // Pagination
+    const pageNum = page && !isNaN(Number(page)) ? Math.max(1, Number(page)) : 1;
+    let limitNum = limit && !isNaN(Number(limit)) ? Math.max(1, Number(limit)) : 10;
+    if (limitNum > 50) limitNum = 50;
+
+    const offsetNum = (pageNum - 1) * limitNum;
+
+    query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limitNum, offsetNum);
+
+    const result = await pool.query<ProfileRow & { total_count: string }>(query, params);
+
+    const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
 
     res.status(200).json({
       status: "success",
-      count: result.rows.length,
-      data: result.rows.map(formatListProfile),
+      page: pageNum,
+      limit: limitNum,
+      total: totalCount,
+      data: result.rows.map(formatClientProfile),
     });
   } catch (err: any) {
     console.error("Error fetching profiles:", err.message);
