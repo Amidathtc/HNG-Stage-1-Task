@@ -330,12 +330,35 @@ export async function getAllProfiles(req: Request, res: Response): Promise<void>
     const result = await pool.query<ProfileRow & { total_count: string }>(query, params);
 
     const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+    const totalPages = Math.ceil(totalCount / limitNum) || 1;
+
+    // Build base query string (without page/limit) for links
+    const baseParams: string[] = [];
+    if (req.query.gender) baseParams.push(`gender=${req.query.gender}`);
+    if (req.query.age_group) baseParams.push(`age_group=${req.query.age_group}`);
+    if (req.query.country_id) baseParams.push(`country_id=${req.query.country_id}`);
+    if (req.query.min_age) baseParams.push(`min_age=${req.query.min_age}`);
+    if (req.query.max_age) baseParams.push(`max_age=${req.query.max_age}`);
+    if (req.query.sort_by) baseParams.push(`sort_by=${req.query.sort_by}`);
+    if (req.query.order) baseParams.push(`order=${req.query.order}`);
+    const filterStr = baseParams.length > 0 ? `&${baseParams.join("&")}` : "";
+
+    const basePath = req.path === "/search" ? "/api/profiles/search" : "/api/profiles";
+    const selfUrl = `${basePath}?page=${pageNum}&limit=${limitNum}${filterStr}`;
+    const nextUrl = pageNum < totalPages ? `${basePath}?page=${pageNum + 1}&limit=${limitNum}${filterStr}` : null;
+    const prevUrl = pageNum > 1 ? `${basePath}?page=${pageNum - 1}&limit=${limitNum}${filterStr}` : null;
 
     res.status(200).json({
       status: "success",
       page: pageNum,
       limit: limitNum,
       total: totalCount,
+      total_pages: totalPages,
+      links: {
+        self: selfUrl,
+        next: nextUrl,
+        prev: prevUrl,
+      },
       data: result.rows.map(formatClientProfile),
     });
   } catch (err: any) {

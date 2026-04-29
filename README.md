@@ -1,145 +1,207 @@
-# Profile Classification API
+# Insighta Labs+ — Backend API
 
-A RESTful API that accepts a name, fetches predictions from three external APIs (Genderize, Agify, Nationalize), applies classification logic, and persists the results in a PostgreSQL database.
+A secure, multi-interface Profile Intelligence System with GitHub OAuth, RBAC, and full API versioning. Built with **TypeScript**, **Express**, and **PostgreSQL**.
 
-Built with **TypeScript**, **Express**, and **PostgreSQL**.
+## System Architecture
 
-## Features
+```
+┌────────────────┐   Bearer JWT     ┌──────────────────────────┐
+│  insighta CLI  │ ───────────────► │                          │
+└────────────────┘                  │   Backend API            │
+                                    │   (Express + PostgreSQL)  │
+┌────────────────┐  HTTP-only Cookie│                          │
+│   Web Portal   │ ───────────────► │   /auth/*  /api/*        │
+│   (Next.js)    │                  │                          │
+└────────────────┘                  └──────────────────────────┘
+```
 
-- **Multi-API Integration** — Fetches gender, age, and nationality predictions in parallel
-- **Classification Logic** — Categorizes age into groups (child, teenager, adult, senior)
-- **Data Persistence** — Stores profiles in PostgreSQL with UUID v7 identifiers
-- **Idempotency** — Duplicate names return the existing profile instead of creating a new one
-- **Filtering** — Query profiles by gender, country, or age group (case-insensitive)
-- **Error Handling** — Graceful handling of invalid external API responses (502) and input validation (400/422)
+Three separate repositories share **one backend**. All auth flows through GitHub OAuth. All data lives in one PostgreSQL database.
 
-## Tech Stack
+## Authentication Flow
 
-| Layer      | Technology         |
-|------------|--------------------|
-| Language   | TypeScript         |
-| Framework  | Express 5          |
-| Database   | PostgreSQL         |
-| External   | Genderize, Agify, Nationalize APIs |
-| IDs        | UUID v7            |
+### CLI (PKCE + Device Code Pattern)
+1. `insighta login` — CLI generates `state`, `code_verifier`, `code_challenge` (SHA-256)
+2. Starts a local HTTP server on port `9876`
+3. Opens GitHub OAuth page in browser with PKCE params
+4. GitHub redirects to `http://localhost:9876/callback`
+5. CLI validates `state`, sends `code + code_verifier` to `POST /auth/github/callback?mode=cli`
+6. Backend exchanges code with GitHub, creates/updates user, issues JWT pair
+7. CLI stores tokens in `~/.insighta/credentials.json`
+
+### Web Portal (Browser OAuth)
+1. User clicks "Continue with GitHub" → `/api/auth/login` (Next.js route)
+2. Next.js generates PKCE params, stores in HTTP-only cookies, redirects to backend
+3. Backend processes callback → issues tokens → redirects back to Next.js `/api/auth/callback`
+4. Next.js sets `access_token` and `refresh_token` as **HTTP-only, Secure, SameSite=Strict** cookies
+5. User lands on `/dashboard`
+
+## Token Handling
+
+| Token | Expiry | Storage |
+|---|---|---|
+| Access Token | 3 minutes | CLI: `~/.insighta/credentials.json` · Web: HTTP-only cookie |
+| Refresh Token | 5 minutes | CLI: `~/.insighta/credentials.json` · Web: HTTP-only cookie · DB: hashed |
+
+- Refresh tokens are **SHA-256 hashed** before storage
+- On use, the old refresh token is **immediately invalidated** (rotation)
+- Tokens are never accessible via JavaScript in the web portal
+
+## Role Enforcement Logic
+
+| Role | Permissions |
+|---|---|
+| `admin` | Create profiles, delete profiles, read, search, export |
+| `analyst` | Read, search, export (read-only) |
+
+- Default role for new users: **analyst**
+- Role is embedded in the JWT payload and verified on every request
+- Inactive users (`is_active = false`) receive `403 Forbidden` on all requests
+- Role enforcement uses structured middleware, not scattered checks
 
 ## API Endpoints
 
-### Create Profile
+### Authentication (`/auth/*`)
 ```
-POST /api/profiles
-Content-Type: application/json
-
-{ "name": "ella" }
+GET  /auth/github              Redirect to GitHub OAuth
+GET  /auth/github/callback     Handle OAuth callback, issue tokens
+POST /auth/refresh             Rotate refresh token, issue new pair
+POST /auth/logout              Invalidate refresh token
+GET  /auth/whoami              Return current user (requires auth)
 ```
-**201 Created** — Returns the created profile.  
-**200 OK** — If the name already exists, returns the existing profile with a message.
 
-### Get Single Profile
+### Profiles (`/api/profiles`) — requires `X-API-Version: 1` header
+
 ```
-GET /api/profiles/:id
+GET    /api/profiles                  List profiles (filterable, paginated)
+POST   /api/profiles                  Create profile [admin only]
+GET    /api/profiles/search?q=...     Natural language search
+GET    /api/profiles/export?format=csv  Export CSV
+GET    /api/profiles/:id              Get single profile
+DELETE /api/profiles/:id              Delete profile [admin only]
 ```
-**200 OK** — Returns the full profile.
 
-### Get All Profiles
-```
-GET /api/profiles?gender=male&country_id=NG&age_group=adult&sort_by=age&order=desc
-```
-**200 OK** — Returns paginated and filtered list with total count.
-
-**Supported Filters**:
-`gender`, `age_group`, `country_id`, `min_age`, `max_age`, `min_gender_probability`, `min_country_probability`.
-
-**Sorting and Pagination**:
-`sort_by` (age, created_at, gender_probability), `order` (asc, desc). Defaults to `created_at` DESC.
-`page` (default 1), `limit` (default 10, max 50).
-
-### Natural Language Search
-```
-GET /api/profiles/search?q=young males from nigeria
-```
-**200 OK** — Parses plain English query strings to match the data exactly and supports pagination identically to standard listing algorithms.
-
-#### Natural Language Parsing Approach
-Our system uses a fast rule-based engine parsing approach containing explicit keyword and regex pattern definitions directly mapping to Database filtering constraints:
-- **Age Mapping Requirements:** "young" equates to individuals aged 16 to 24 (`min_age=16`, `max_age=24`). Mentions of "child"/"teenager"/"adult"/"senior" map directly to the backend `age_group` schema. Words like "above X", "over X" or "under X", "below X" map dynamically to numeric integer limits (`min_age` or `max_age`).
-- **Gender Syntax:** Variations of explicitly gendered references ("females", "women", "girls" -> `female`) apply to the `gender` column directly.
-- **Location Mapping:** Phrasing such as "from [Country]" or "in [Country]" captures subsequent phrasing via Regex patterns securely mapped to their ISO Code Alpha-2 implementation via `i18n-iso-countries`.
-  
-#### Limitations & Edge Cases
-- **Strict Rule-based:** As this mechanism utilizes rule-based RegExp algorithms, the approach does NOT handle complex AI interpretations, typos/misspellings, or ambiguous compound rules where adjectives override each other confusingly.
-- **Intersection Only Limitations:** Multi-conditional strings ("males OR females") are inherently parsed into intersection logic and evaluate mutually exclusive properties into mutually inclusive filters resulting in mathematically impossible constraints returning 0 elements. We don't parse OR boolean queries effectively.
-- If a query cannot be correctly deciphered due to an unrecognized country or missing mappings, it returns: `{ "status": "error", "message": "Unable to interpret query" }`.
-
-### Delete Profile
-```
-DELETE /api/profiles/:id
-```
-**204 No Content** — Profile deleted successfully.
-
-## Error Responses
-
-All errors follow this structure:
+### Pagination Response Shape
 ```json
 {
-  "status": "error",
-  "message": "Description of what went wrong"
+  "status": "success",
+  "page": 1,
+  "limit": 10,
+  "total": 2026,
+  "total_pages": 203,
+  "links": {
+    "self": "/api/profiles?page=1&limit=10",
+    "next": "/api/profiles?page=2&limit=10",
+    "prev": null
+  },
+  "data": [...]
 }
 ```
 
-| Code | Meaning |
-|------|---------|
-| 400  | Missing or empty name |
-| 404  | Profile not found |
-| 422  | Invalid type (e.g., name is not a string) |
-| 502  | External API returned invalid data |
-| 500  | Internal server error |
+## Natural Language Parsing
+
+The search engine uses a **rule-based regex parser** that maps plain English to filter constraints:
+
+| Pattern | Result |
+|---|---|
+| `males / men / boys` | `gender=male` |
+| `females / women / girls` | `gender=female` |
+| `young` | `min_age=16&max_age=24` |
+| `child / children` | `age_group=child` |
+| `teenager / teens` | `age_group=teenager` |
+| `adult / adults` | `age_group=adult` |
+| `senior / seniors` | `age_group=senior` |
+| `above/over N` | `min_age=N` |
+| `below/under N` | `max_age=N` |
+| `from/in [Country]` | `country_id=XX` (via ISO 3166-1 lookup) |
+
+**Limitations:** No AI/ML — strict regex only. No OR queries. Typos not handled.
+
+## CLI Usage
+
+```bash
+# Install globally
+npm install -g insighta-cli
+
+# Authentication
+insighta login              # GitHub OAuth login (opens browser)
+insighta logout             # Clear session
+insighta whoami             # Show current user
+
+# Profile Commands
+insighta profiles list
+insighta profiles list --gender male --country NG
+insighta profiles list --age-group adult --min-age 25 --max-age 40
+insighta profiles list --sort-by age --order desc --page 2 --limit 20
+insighta profiles get <id>
+insighta profiles search "young males from nigeria"
+insighta profiles create --name "Harriet Tubman"  # admin only
+insighta profiles export --format csv
+insighta profiles export --format csv --gender male --country NG
+```
+
+## Rate Limiting
+
+| Scope | Limit |
+|---|---|
+| `/auth/*` | 10 requests / minute |
+| All other endpoints | 60 requests / minute per user |
+
+Returns `429 Too Many Requests` when exceeded.
 
 ## Setup
 
 ### Prerequisites
 - Node.js >= 18
 - PostgreSQL database
+- GitHub OAuth App
+
+### GitHub OAuth App Setup
+1. Go to https://github.com/settings/developers
+2. Click "New OAuth App"
+3. Set Homepage URL: your deployed backend URL
+4. Set Authorization callback URL: `https://your-backend.com/auth/github/callback`
+5. Copy Client ID and Secret into `.env`
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
+git clone <repo-url>
 cd <repo-folder>
-
-# Install dependencies
 npm install
-
-# Create .env file
 cp .env.example .env
-# Edit .env with your DATABASE_URL
-
-# Build TypeScript
+# Fill in .env values
 npm run build
-
-# Start the server
 npm start
 ```
 
 ### Environment Variables
 
-| Variable      | Description                    | Example                                         |
-|---------------|--------------------------------|-------------------------------------------------|
-| `DATABASE_URL`| PostgreSQL connection string   | `postgresql://user:pass@localhost:5432/profiles` |
-| `PORT`        | Server port (default: 3000)    | `3000`                                          |
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `PORT` | Server port (default: 3000) |
+| `NODE_ENV` | `development` or `production` |
+| `JWT_SECRET` | Secret for signing JWTs |
+| `GITHUB_CLIENT_ID` | GitHub OAuth App Client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth App Client Secret |
+| `GITHUB_CALLBACK_URL` | OAuth callback URL |
+| `WEB_PORTAL_URL` | Web portal URL (for redirects) |
 
-### Development
+## Tech Stack
 
-```bash
-npm run dev
-```
+| Layer | Technology |
+|---|---|
+| Language | TypeScript |
+| Framework | Express 4 |
+| Database | PostgreSQL |
+| Auth | GitHub OAuth + PKCE + JWT |
+| Logging | Morgan |
+| Rate Limiting | express-rate-limit |
+| IDs | UUID v7 |
 
-## Deployment
+## Engineering Standards
 
-The project includes a `Procfile` for platforms like Railway and Heroku.
-
-**Build command:** `npm run build`  
-**Start command:** `npm start`
-
-Make sure `DATABASE_URL` is set in your deployment environment variables.
+- **Commits**: Conventional commits with scope (e.g. `feat(auth): add github oauth`)
+- **Branches**: Feature branches (`feat/`, `fix/`, `chore/`)
+- **PRs**: Required before merging to `main`
+- **CI/CD**: GitHub Actions on every PR — lint → type-check → build
