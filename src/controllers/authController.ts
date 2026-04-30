@@ -217,9 +217,10 @@ export async function githubCallback(
     await storeRefreshToken(pool, user.id, rawRefreshToken);
 
     // Determine response mode:
-    // - mode=cli: return JSON (CLI will parse and store)
-    // - mode=web (or default): set HTTP-only cookie and redirect
-    if (mode === "cli") {
+    // - mode=cli : return JSON (CLI parses and stores tokens)
+    // - mode=web : return JSON (Next.js web portal sets its own HTTP-only cookies)
+    // - no mode  : legacy — set cookies on backend domain and redirect to web portal
+    if (mode === "cli" || mode === "web") {
       res.status(200).json({
         status: "success",
         access_token: accessToken,
@@ -227,7 +228,7 @@ export async function githubCallback(
         user: userPayload,
       });
     } else {
-      // Web: set HTTP-only cookies
+      // Direct browser hit — set cookies on backend domain and redirect
       const isProd = process.env.NODE_ENV === "production";
       const cookieOptions = {
         httpOnly: true,
