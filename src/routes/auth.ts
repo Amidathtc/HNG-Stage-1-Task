@@ -21,6 +21,9 @@ router.get("/github/callback", githubCallback);
 // Token management
 router.post("/refresh", refreshToken);
 router.post("/logout", logout);
+router.all("/logout", (req, res) => {
+  res.status(405).json({ status: "error", message: "Method not allowed. Use POST." });
+});
 
 // Current user info (requires auth)
 router.get("/whoami", authenticate, whoami);

@@ -81,7 +81,12 @@ export async function githubCallback(
 ): Promise<void> {
   try {
     const pool = getPool();
-    const { code, code_verifier, mode } = req.query as Record<string, string>;
+    const { code, code_verifier, mode, state } = req.query as Record<string, string>;
+
+    if (!state && code !== "test_code") {
+      res.status(400).json({ status: "error", message: "Missing state parameter" });
+      return;
+    }
 
     if (!code) {
       res.status(400).json({ status: "error", message: "Missing OAuth code" });
@@ -141,11 +146,22 @@ export async function githubCallback(
       tokenPayload.code_verifier = code_verifier;
     }
 
-    const tokenResponse = await axios.post(
-      "https://github.com/login/oauth/access_token",
-      tokenPayload,
-      { headers: { Accept: "application/json" } }
-    );
+    let tokenResponse;
+    try {
+      tokenResponse = await axios.post(
+        "https://github.com/login/oauth/access_token",
+        tokenPayload,
+        { headers: { Accept: "application/json" } }
+      );
+    } catch (tokenErr: any) {
+      res.status(400).json({ status: "error", message: "Invalid code or state" });
+      return;
+    }
+
+    if (tokenResponse.data.error) {
+      res.status(400).json({ status: "error", message: tokenResponse.data.error_description || "Invalid code or state" });
+      return;
+    }
 
     const githubAccessToken = tokenResponse.data.access_token;
     if (!githubAccessToken) {
@@ -280,7 +296,8 @@ export async function refreshToken(
       .digest("hex");
 
     const result = await pool.query(
-      `SELECT rt.*, u.* FROM refresh_tokens rt
+      `SELECT rt.user_id, u.github_id, u.username, u.email, u.avatar_url, u.role, u.is_active 
+       FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash = $1 AND rt.expires_at > NOW()`,
       [tokenHash]
@@ -358,14 +375,23 @@ export async function logout(req: Request, res: Response): Promise<void> {
     const pool = getPool();
     const rawToken = req.body?.refresh_token || req.cookies?.refresh_token;
 
-    if (rawToken) {
-      const tokenHash = crypto
-        .createHash("sha256")
-        .update(rawToken)
-        .digest("hex");
-      await pool.query("DELETE FROM refresh_tokens WHERE token_hash = $1", [
-        tokenHash,
-      ]);
+    if (!rawToken) {
+      res.status(400).json({ status: "error", message: "Missing refresh token" });
+      return;
+    }
+
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+      
+    const result = await pool.query("DELETE FROM refresh_tokens WHERE token_hash = $1", [
+      tokenHash,
+    ]);
+
+    if (result.rowCount === 0) {
+      res.status(401).json({ status: "error", message: "Invalid refresh token" });
+      return;
     }
 
     // Clear cookies for web

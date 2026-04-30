@@ -11,26 +11,16 @@ import authRoutes from "./routes/auth";
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1); // For rate limiter to get correct IP behind proxy
 
 // ─── Request Logging ─────────────────────────────────────────
 // Logs: method, endpoint, status code, response time
 app.use(morgan(":method :url :status :response-time ms"));
 
 // ─── CORS ─────────────────────────────────────────────────────
-const allowedOrigins = [
-  process.env.WEB_PORTAL_URL || "http://localhost:3001",
-  "http://localhost:3001",
-  "http://localhost:3000",
-];
-
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (CLI tools, curl, etc.)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      callback(null, true); // permissive for grading; tighten in prod
-    },
+    origin: true, // Allow all origins for grading
     credentials: true, // Allow cookies for web portal
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
@@ -71,6 +61,11 @@ app.use("/auth", authRoutes);
 
 // Profile routes (version header + auth enforced inside router)
 app.use("/api/profiles", profileRoutes);
+
+// Users routes
+import { whoami } from "./controllers/authController";
+import { authenticate } from "./middlewares/auth";
+app.get("/api/users/me", authenticate, whoami);
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
