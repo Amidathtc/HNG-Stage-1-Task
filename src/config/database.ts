@@ -85,6 +85,32 @@ export async function initDB(): Promise<void> {
       ON refresh_tokens (user_id);
     `);
 
+    // ─── Performance Indexes (Stage 4B) ──────────────────────
+    // Composite index: covers the most common filter combo (gender + country)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_profiles_gender_country
+      ON profiles (gender, country_id);
+    `);
+
+    // Individual index for age range queries (above/below N)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_profiles_age
+      ON profiles (age);
+    `);
+
+    // Index for age_group equality filters (child, teen, adult, senior)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_profiles_age_group
+      ON profiles (age_group);
+    `);
+
+    // BRIN index on created_at — very small footprint, optimal for
+    // chronologically inserted data (batch ingestion pattern)
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_profiles_created_at_brin
+      ON profiles USING BRIN (created_at);
+    `);
+
     dbInitialized = true;
     console.log("✅ Database initialized successfully");
   } catch (err: any) {
