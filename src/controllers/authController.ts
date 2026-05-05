@@ -81,7 +81,7 @@ export async function githubCallback(
 ): Promise<void> {
   try {
     const pool = getPool();
-    const { code, code_verifier, mode, state } = req.query as Record<string, string>;
+    const { code, code_verifier, mode, state, redirect_uri } = req.query as Record<string, string>;
 
     if (!state && code !== "test_code") {
       res.status(400).json({ status: "error", message: "Missing state parameter" });
@@ -133,14 +133,14 @@ export async function githubCallback(
 
     const clientId = process.env.GITHUB_CLIENT_ID!;
     const clientSecret = process.env.GITHUB_CLIENT_SECRET!;
-    const redirectUri = process.env.GITHUB_CALLBACK_URL!;
+    const exchangeRedirectUri = redirect_uri || process.env.GITHUB_CALLBACK_URL!;
 
     // Exchange code for GitHub access token
     const tokenPayload: Record<string, string> = {
       client_id: clientId,
       client_secret: clientSecret,
       code,
-      redirect_uri: redirectUri,
+      redirect_uri: exchangeRedirectUri,
     };
     if (code_verifier) {
       tokenPayload.code_verifier = code_verifier;
