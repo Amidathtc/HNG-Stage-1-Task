@@ -154,7 +154,8 @@ export async function githubCallback(
         { headers: { Accept: "application/json" } }
       );
     } catch (tokenErr: any) {
-      res.status(400).json({ status: "error", message: "Invalid code or state" });
+      const errorMsg = tokenErr.response?.data?.error_description || tokenErr.message || "Invalid code or state";
+      res.status(400).json({ status: "error", message: errorMsg });
       return;
     }
 
